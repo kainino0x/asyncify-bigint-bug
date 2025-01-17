@@ -882,6 +882,8 @@ async function createWasm() {
 
 // === Body ===
 
+function my_async_i32() { return Asyncify.handleAsync(async () => { return -123; }); }
+function my_async_u32() { return Asyncify.handleAsync(async () => { return -123; }); }
 function my_async_i64() { return Asyncify.handleAsync(async () => { return -123n; }); }
 function my_async_u64() { return Asyncify.handleAsync(async () => { return -123n; }); }
 
@@ -1243,7 +1245,7 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return -123n
   rewindArguments:{
   },
   instrumentWasmImports(imports) {
-        var importPattern = /^(my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
+        var importPattern = /^(my_async_i32|my_async_u32|my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
   
         for (let [x, original] of Object.entries(imports)) {
           if (typeof original == 'function') {
@@ -1513,7 +1515,11 @@ var wasmImports = {
   /** @export */
   fd_write: _fd_write,
   /** @export */
+  my_async_i32,
+  /** @export */
   my_async_i64,
+  /** @export */
+  my_async_u32,
   /** @export */
   my_async_u64
 };

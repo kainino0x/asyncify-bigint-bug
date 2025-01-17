@@ -1,6 +1,6 @@
 all:
 
-ARGS := -v -g -sASYNCIFY_IMPORTS=my_async_i64,my_async_u64
+ARGS := -v -g -sASYNCIFY_IMPORTS=my_async_i32,my_async_u32,my_async_i64,my_async_u64
 
 all: main_asyncify_bigint.html
 main_asyncify_bigint.html: main.cpp Makefile

@@ -883,6 +883,10 @@ async function createWasm() {
 
 // === Body ===
 
+function my_async_i32() { return Asyncify.handleAsync(async () => { return -123; }); }
+my_async_i32.sig = 'i';
+function my_async_u32() { return Asyncify.handleAsync(async () => { return -123; }); }
+my_async_u32.sig = 'i';
 function my_async_i64() { return Asyncify.handleAsync(async () => { return -123n; }); }
 my_async_i64.sig = 'j';
 function my_async_u64() { return Asyncify.handleAsync(async () => { return -123n; }); }
@@ -1197,7 +1201,7 @@ my_async_u64.sig = 'j';
   var Asyncify = {
   instrumentWasmImports(imports) {
         assert('Suspending' in WebAssembly, 'JSPI not supported by current environment. Perhaps it needs to be enabled via flags?');
-        var importPattern = /^(my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
+        var importPattern = /^(my_async_i32|my_async_u32|my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
   
         for (let [x, original] of Object.entries(imports)) {
           if (typeof original == 'function') {
@@ -1256,7 +1260,11 @@ var wasmImports = {
   /** @export */
   fd_write: _fd_write,
   /** @export */
+  my_async_i32,
+  /** @export */
   my_async_i64,
+  /** @export */
+  my_async_u32,
   /** @export */
   my_async_u64
 };
