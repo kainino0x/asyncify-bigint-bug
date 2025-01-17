@@ -64,9 +64,9 @@ if (ENVIRONMENT_IS_NODE) {
   var nodeVersion = process.versions.node;
   var numericVersion = nodeVersion.split('.').slice(0, 3);
   numericVersion = (numericVersion[0] * 10000) + (numericVersion[1] * 100) + (numericVersion[2].split('-')[0] * 1);
-  var minVersion = 160000;
-  if (numericVersion < 160000) {
-    throw new Error('This emscripten-generated code requires node v16.0.0 (detected v' + nodeVersion + ')');
+  var minVersion = 230000;
+  if (numericVersion < 230000) {
+    throw new Error('This emscripten-generated code requires node v23.0.0 (detected v' + nodeVersion + ')');
   }
 
   // These modules will usually be used on Node.js. Load them eagerly to avoid
@@ -279,6 +279,13 @@ function assert(condition, text) {
 
 // We used to include malloc/free by default in the past. Show a helpful error in
 // builds with assertions.
+function _malloc() {
+  abort('malloc() called but not included in the build - add `_malloc` to EXPORTED_FUNCTIONS');
+}
+function _free() {
+  // Show a helpful error since we used to include free by default in the past.
+  abort('free() called but not included in the build - add `_free` to EXPORTED_FUNCTIONS');
+}
 
 // Memory management
 
@@ -339,10 +346,10 @@ function writeStackCookie() {
   // The stack grow downwards towards _emscripten_stack_get_end.
   // We write cookies to the final two words in the stack and detect if they are
   // ever overwritten.
-  HEAPU32[((max)>>2)] = 0x02135467;
-  HEAPU32[(((max)+(4))>>2)] = 0x89BACDFE;
+  HEAPU32[((max)/4)] = 0x02135467;
+  HEAPU32[(((max)+(4))/4)] = 0x89BACDFE;
   // Also test the global address 0 for integrity.
-  HEAPU32[((0)>>2)] = 1668509029;
+  HEAPU32[((0)/4)] = 1668509029;
 }
 
 function checkStackCookie() {
@@ -352,13 +359,13 @@ function checkStackCookie() {
   if (max == 0) {
     max += 4;
   }
-  var cookie1 = HEAPU32[((max)>>2)];
-  var cookie2 = HEAPU32[(((max)+(4))>>2)];
+  var cookie1 = HEAPU32[((max)/4)];
+  var cookie2 = HEAPU32[(((max)+(4))/4)];
   if (cookie1 != 0x02135467 || cookie2 != 0x89BACDFE) {
     abort(`Stack overflow! Stack cookie has been overwritten at ${ptrToString(max)}, expected hex dwords 0x89BACDFE and 0x2135467, but received ${ptrToString(cookie2)} ${ptrToString(cookie1)}`);
   }
   // Also test the global address 0 for integrity.
-  if (HEAPU32[((0)>>2)] != 0x63736d65 /* 'emsc' */) {
+  if (HEAPU32[((0)/4)] != 0x63736d65 /* 'emsc' */) {
     abort('Runtime error: The application has corrupted its heap memory area (address zero)!');
   }
 }
@@ -663,10 +670,6 @@ function abort(what) {
 
   ABORT = true;
 
-  if (what.indexOf('RuntimeError: unreachable') >= 0) {
-    what += '. "unreachable" may be due to ASYNCIFY_STACK_SIZE not being large enough (try increasing it)';
-  }
-
   // Use a wasm runtime error, because a JS error might be seen as a foreign
   // exception, which means we'd run destructors on it. We need the error to
   // simply make the program stop.
@@ -721,7 +724,7 @@ function createExportWrapper(name, nargs) {
 
 var wasmBinaryFile;
 function findWasmBinary() {
-    var f = 'main_bigint.wasm';
+    var f = 'main_jspi_wasm64.wasm';
     if (!isDataURI(f)) {
       return locateFile(f);
     }
@@ -824,6 +827,8 @@ async function createWasm() {
 
     wasmExports = Asyncify.instrumentWasmExports(wasmExports);
 
+    wasmExports = applySignatureConversions(wasmExports);
+
     
 
     wasmMemory = wasmExports['memory'];
@@ -880,8 +885,10 @@ async function createWasm() {
 
 // === Body ===
 
-function my_async_i64() { return Asyncify.handleAsync(async () => { return 123n; }); }
-function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n; }); }
+function my_async_i64() { return Asyncify.handleAsync(async () => { return -123n; }); }
+my_async_i64.sig = 'j';
+function my_async_u64() { return Asyncify.handleAsync(async () => { return -123n; }); }
+my_async_u64.sig = 'j';
 
 // end include: preamble.js
 
@@ -911,12 +918,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
     switch (type) {
       case 'i1': return HEAP8[ptr];
       case 'i8': return HEAP8[ptr];
-      case 'i16': return HEAP16[((ptr)>>1)];
-      case 'i32': return HEAP32[((ptr)>>2)];
-      case 'i64': return HEAP64[((ptr)>>3)];
-      case 'float': return HEAPF32[((ptr)>>2)];
-      case 'double': return HEAPF64[((ptr)>>3)];
-      case '*': return HEAPU32[((ptr)>>2)];
+      case 'i16': return HEAP16[((ptr)/2)];
+      case 'i32': return HEAP32[((ptr)/4)];
+      case 'i64': return HEAP64[((ptr)/8)];
+      case 'float': return HEAPF32[((ptr)/4)];
+      case 'double': return HEAPF64[((ptr)/8)];
+      case '*': return Number(HEAPU64[((ptr)/8)]);
       default: abort(`invalid type for getValue: ${type}`);
     }
   }
@@ -925,8 +932,6 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
 
   var ptrToString = (ptr) => {
       assert(typeof ptr === 'number');
-      // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
-      ptr >>>= 0;
       return '0x' + ptr.toString(16).padStart(8, '0');
     };
 
@@ -941,12 +946,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
     switch (type) {
       case 'i1': HEAP8[ptr] = value; break;
       case 'i8': HEAP8[ptr] = value; break;
-      case 'i16': HEAP16[((ptr)>>1)] = value; break;
-      case 'i32': HEAP32[((ptr)>>2)] = value; break;
-      case 'i64': HEAP64[((ptr)>>3)] = BigInt(value); break;
-      case 'float': HEAPF32[((ptr)>>2)] = value; break;
-      case 'double': HEAPF64[((ptr)>>3)] = value; break;
-      case '*': HEAPU32[((ptr)>>2)] = value; break;
+      case 'i16': HEAP16[((ptr)/2)] = value; break;
+      case 'i32': HEAP32[((ptr)/4)] = value; break;
+      case 'i64': HEAP64[((ptr)/8)] = BigInt(value); break;
+      case 'float': HEAPF32[((ptr)/4)] = value; break;
+      case 'double': HEAPF64[((ptr)/8)] = value; break;
+      case '*': HEAPU64[((ptr)/8)] = BigInt(value); break;
       default: abort(`invalid type for setValue: ${type}`);
     }
   }
@@ -964,27 +969,8 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
       }
     };
 
-  var __abort_js = () =>
-      abort('native code called abort()');
-
-  var getHeapMax = () =>
-      HEAPU8.length;
+  var printCharBuffers = [null,[],[]];
   
-  var alignMemory = (size, alignment) => {
-      assert(alignment, "alignment argument is required");
-      return Math.ceil(size / alignment) * alignment;
-    };
-  
-  var abortOnCannotGrowMemory = (requestedSize) => {
-      abort(`Cannot enlarge memory arrays to size ${requestedSize} bytes (OOM). Either (1) compile with -sINITIAL_MEMORY=X with X higher than the current value ${HEAP8.length}, (2) compile with -sALLOW_MEMORY_GROWTH which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with -sABORTING_MALLOC=0`);
-    };
-  var _emscripten_resize_heap = (requestedSize) => {
-      var oldSize = HEAPU8.length;
-      // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
-      requestedSize >>>= 0;
-      abortOnCannotGrowMemory(requestedSize);
-    };
-
   var UTF8Decoder = typeof TextDecoder != 'undefined' ? new TextDecoder() : undefined;
   
     /**
@@ -1038,6 +1024,25 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
       }
       return str;
     };
+  var printChar = (stream, curr) => {
+      var buffer = printCharBuffers[stream];
+      assert(buffer);
+      if (curr === 0 || curr === 10) {
+        (stream === 1 ? out : err)(UTF8ArrayToString(buffer));
+        buffer.length = 0;
+      } else {
+        buffer.push(curr);
+      }
+    };
+  
+  var flush_NO_FILESYSTEM = () => {
+      // flush anything remaining in the buffers during shutdown
+      _fflush(0);
+      if (printCharBuffers[1].length) printChar(1, 10);
+      if (printCharBuffers[2].length) printChar(2, 10);
+    };
+  
+  
   
     /**
      * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
@@ -1065,58 +1070,32 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         return ret;
       },
   };
-  var _fd_close = (fd) => {
-      abort('fd_close called without SYSCALLS_REQUIRE_FILESYSTEM');
-    };
-
+  
   var INT53_MAX = 9007199254740992;
   
   var INT53_MIN = -9007199254740992;
   var bigintToI53Checked = (num) => (num < INT53_MIN || num > INT53_MAX) ? NaN : Number(num);
-  function _fd_seek(fd, offset, whence, newOffset) {
-    offset = bigintToI53Checked(offset);
+  function _fd_write(fd, iov, iovcnt, pnum) {
+    iov = bigintToI53Checked(iov);
+    iovcnt = bigintToI53Checked(iovcnt);
+    pnum = bigintToI53Checked(pnum);
   
     
-      return 70;
-    ;
-  }
-
-  var printCharBuffers = [null,[],[]];
-  
-  var printChar = (stream, curr) => {
-      var buffer = printCharBuffers[stream];
-      assert(buffer);
-      if (curr === 0 || curr === 10) {
-        (stream === 1 ? out : err)(UTF8ArrayToString(buffer));
-        buffer.length = 0;
-      } else {
-        buffer.push(curr);
-      }
-    };
-  
-  var flush_NO_FILESYSTEM = () => {
-      // flush anything remaining in the buffers during shutdown
-      _fflush(0);
-      if (printCharBuffers[1].length) printChar(1, 10);
-      if (printCharBuffers[2].length) printChar(2, 10);
-    };
-  
-  
-  var _fd_write = (fd, iov, iovcnt, pnum) => {
       // hack to support printf in SYSCALLS_REQUIRE_FILESYSTEM=0
       var num = 0;
       for (var i = 0; i < iovcnt; i++) {
-        var ptr = HEAPU32[((iov)>>2)];
-        var len = HEAPU32[(((iov)+(4))>>2)];
-        iov += 8;
+        var ptr = Number(HEAPU64[((iov)/8)]);
+        var len = Number(HEAPU64[(((iov)+(8))/8)]);
+        iov += 16;
         for (var j = 0; j < len; j++) {
           printChar(fd, HEAPU8[ptr+j]);
         }
         num += len;
       }
-      HEAPU32[((pnum)>>2)] = num;
+      HEAPU64[((pnum)/8)] = BigInt(num);
       return 0;
-    };
+    ;
+  }
 
   
   var runtimeKeepaliveCounter = 0;
@@ -1205,7 +1184,7 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         'f': 'f32',
         'd': 'f64',
         'e': 'externref',
-        'p': 'i32',
+        'p': 'i64',
       };
       var type = {
         parameters: [],
@@ -1226,58 +1205,35 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
       assert(runtimeKeepaliveCounter > 0);
       runtimeKeepaliveCounter -= 1;
     };
-  
-  
   var Asyncify = {
   instrumentWasmImports(imports) {
+        assert('Suspending' in WebAssembly, 'JSPI not supported by current environment. Perhaps it needs to be enabled via flags?');
         var importPattern = /^(my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
   
         for (let [x, original] of Object.entries(imports)) {
           if (typeof original == 'function') {
             let isAsyncifyImport = original.isAsync || importPattern.test(x);
-            imports[x] = (...args) => {
-              var originalAsyncifyState = Asyncify.state;
-              try {
-                return original(...args);
-              } finally {
-                // Only asyncify-declared imports are allowed to change the
-                // state.
-                // Changing the state from normal to disabled is allowed (in any
-                // function) as that is what shutdown does (and we don't have an
-                // explicit list of shutdown imports).
-                var changedToDisabled =
-                      originalAsyncifyState === Asyncify.State.Normal &&
-                      Asyncify.state        === Asyncify.State.Disabled;
-                // invoke_* functions are allowed to change the state if we do
-                // not ignore indirect calls.
-                var ignoredInvoke = x.startsWith('invoke_') &&
-                                    true;
-                if (Asyncify.state !== originalAsyncifyState &&
-                    !isAsyncifyImport &&
-                    !changedToDisabled &&
-                    !ignoredInvoke) {
-                  throw new Error(`import ${x} was not in ASYNCIFY_IMPORTS, but changed the state`);
-                }
-              }
-            };
+            // Wrap async imports with a suspending WebAssembly function.
+            if (isAsyncifyImport) {
+              imports[x] = original = new WebAssembly.Suspending(original);
+            }
           }
         }
       },
   instrumentWasmExports(exports) {
+        var exportPattern = /^(main|__main_argc_argv)$/;
+        Asyncify.asyncExports = new Set();
         var ret = {};
         for (let [x, original] of Object.entries(exports)) {
           if (typeof original == 'function') {
+            // Wrap all exports with a promising WebAssembly function.
+            let isAsyncifyExport = exportPattern.test(x);
+            if (isAsyncifyExport) {
+              Asyncify.asyncExports.add(original);
+              original = Asyncify.makeAsyncFunction(original);
+            }
             ret[x] = (...args) => {
-              Asyncify.exportCallStack.push(x);
-              try {
                 return original(...args);
-              } finally {
-                if (!ABORT) {
-                  var y = Asyncify.exportCallStack.pop();
-                  assert(y === x);
-                  Asyncify.maybeStopUnwind();
-                }
-              }
             };
           } else {
             ret[x] = original;
@@ -1285,207 +1241,29 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         }
         return ret;
       },
-  State:{
-  Normal:0,
-  Unwinding:1,
-  Rewinding:2,
-  Disabled:3,
-  },
-  state:0,
-  StackSize:4096,
-  currData:null,
-  handleSleepReturnValue:0,
-  exportCallStack:[],
-  callStackNameToId:{
-  },
-  callStackIdToName:{
-  },
-  callStackId:0,
-  asyncPromiseHandlers:null,
-  sleepCallbacks:[],
-  getCallStackId(funcName) {
-        var id = Asyncify.callStackNameToId[funcName];
-        if (id === undefined) {
-          id = Asyncify.callStackId++;
-          Asyncify.callStackNameToId[funcName] = id;
-          Asyncify.callStackIdToName[id] = funcName;
-        }
-        return id;
+  asyncExports:null,
+  isAsyncExport(func) {
+        return Asyncify.asyncExports?.has(func);
       },
-  maybeStopUnwind() {
-        if (Asyncify.currData &&
-            Asyncify.state === Asyncify.State.Unwinding &&
-            Asyncify.exportCallStack.length === 0) {
-          // We just finished unwinding.
-          // Be sure to set the state before calling any other functions to avoid
-          // possible infinite recursion here (For example in debug pthread builds
-          // the dbg() function itself can call back into WebAssembly to get the
-          // current pthread_self() pointer).
-          Asyncify.state = Asyncify.State.Normal;
-          
-          // Keep the runtime alive so that a re-wind can be done later.
-          runAndAbortIfError(_asyncify_stop_unwind);
-          if (typeof Fibers != 'undefined') {
-            Fibers.trampoline();
-          }
-        }
-      },
-  whenDone() {
-        assert(Asyncify.currData, 'Tried to wait for an async operation when none is in progress.');
-        assert(!Asyncify.asyncPromiseHandlers, 'Cannot have multiple async operations in flight at once');
-        return new Promise((resolve, reject) => {
-          Asyncify.asyncPromiseHandlers = { resolve, reject };
-        });
-      },
-  allocateData() {
-        // An asyncify data structure has three fields:
-        //  0  current stack pos
-        //  4  max stack pos
-        //  8  id of function at bottom of the call stack (callStackIdToName[id] == name of js function)
-        //
-        // The Asyncify ABI only interprets the first two fields, the rest is for the runtime.
-        // We also embed a stack in the same memory region here, right next to the structure.
-        // This struct is also defined as asyncify_data_t in emscripten/fiber.h
-        var ptr = _malloc(12 + Asyncify.StackSize);
-        Asyncify.setDataHeader(ptr, ptr + 12, Asyncify.StackSize);
-        Asyncify.setDataRewindFunc(ptr);
-        return ptr;
-      },
-  setDataHeader(ptr, stack, stackSize) {
-        HEAPU32[((ptr)>>2)] = stack;
-        HEAPU32[(((ptr)+(4))>>2)] = stack + stackSize;
-      },
-  setDataRewindFunc(ptr) {
-        var bottomOfCallStack = Asyncify.exportCallStack[0];
-        var rewindId = Asyncify.getCallStackId(bottomOfCallStack);
-        HEAP32[(((ptr)+(8))>>2)] = rewindId;
-      },
-  getDataRewindFuncName(ptr) {
-        var id = HEAP32[(((ptr)+(8))>>2)];
-        var name = Asyncify.callStackIdToName[id];
-        return name;
-      },
-  getDataRewindFunc(name) {
-        var func = wasmExports[name];
-        return func;
-      },
-  doRewind(ptr) {
-        var name = Asyncify.getDataRewindFuncName(ptr);
-        var func = Asyncify.getDataRewindFunc(name);
-        // Once we have rewound and the stack we no longer need to artificially
-        // keep the runtime alive.
+  handleAsync:async (startAsync) => {
         
-        return func();
+        try {
+          return await startAsync();
+        } finally {
+          
+        }
       },
   handleSleep(startAsync) {
-        assert(Asyncify.state !== Asyncify.State.Disabled, 'Asyncify cannot be done during or after the runtime exits');
-        if (ABORT) return;
-        if (Asyncify.state === Asyncify.State.Normal) {
-          // Prepare to sleep. Call startAsync, and see what happens:
-          // if the code decided to call our callback synchronously,
-          // then no async operation was in fact begun, and we don't
-          // need to do anything.
-          var reachedCallback = false;
-          var reachedAfterCallback = false;
-          startAsync((handleSleepReturnValue = 0) => {
-            assert(!handleSleepReturnValue || typeof handleSleepReturnValue == 'number' || typeof handleSleepReturnValue == 'boolean'); // old emterpretify API supported other stuff
-            if (ABORT) return;
-            Asyncify.handleSleepReturnValue = handleSleepReturnValue;
-            reachedCallback = true;
-            if (!reachedAfterCallback) {
-              // We are happening synchronously, so no need for async.
-              return;
-            }
-            // This async operation did not happen synchronously, so we did
-            // unwind. In that case there can be no compiled code on the stack,
-            // as it might break later operations (we can rewind ok now, but if
-            // we unwind again, we would unwind through the extra compiled code
-            // too).
-            assert(!Asyncify.exportCallStack.length, 'Waking up (starting to rewind) must be done from JS, without compiled code on the stack.');
-            Asyncify.state = Asyncify.State.Rewinding;
-            runAndAbortIfError(() => _asyncify_start_rewind(Asyncify.currData));
-            if (typeof MainLoop != 'undefined' && MainLoop.func) {
-              MainLoop.resume();
-            }
-            var asyncWasmReturnValue, isError = false;
-            try {
-              asyncWasmReturnValue = Asyncify.doRewind(Asyncify.currData);
-            } catch (err) {
-              asyncWasmReturnValue = err;
-              isError = true;
-            }
-            // Track whether the return value was handled by any promise handlers.
-            var handled = false;
-            if (!Asyncify.currData) {
-              // All asynchronous execution has finished.
-              // `asyncWasmReturnValue` now contains the final
-              // return value of the exported async WASM function.
-              //
-              // Note: `asyncWasmReturnValue` is distinct from
-              // `Asyncify.handleSleepReturnValue`.
-              // `Asyncify.handleSleepReturnValue` contains the return
-              // value of the last C function to have executed
-              // `Asyncify.handleSleep()`, where as `asyncWasmReturnValue`
-              // contains the return value of the exported WASM function
-              // that may have called C functions that
-              // call `Asyncify.handleSleep()`.
-              var asyncPromiseHandlers = Asyncify.asyncPromiseHandlers;
-              if (asyncPromiseHandlers) {
-                Asyncify.asyncPromiseHandlers = null;
-                (isError ? asyncPromiseHandlers.reject : asyncPromiseHandlers.resolve)(asyncWasmReturnValue);
-                handled = true;
-              }
-            }
-            if (isError && !handled) {
-              // If there was an error and it was not handled by now, we have no choice but to
-              // rethrow that error into the global scope where it can be caught only by
-              // `onerror` or `onunhandledpromiserejection`.
-              throw asyncWasmReturnValue;
-            }
-          });
-          reachedAfterCallback = true;
-          if (!reachedCallback) {
-            // A true async operation was begun; start a sleep.
-            Asyncify.state = Asyncify.State.Unwinding;
-            // TODO: reuse, don't alloc/free every sleep
-            Asyncify.currData = Asyncify.allocateData();
-            if (typeof MainLoop != 'undefined' && MainLoop.func) {
-              MainLoop.pause();
-            }
-            runAndAbortIfError(() => _asyncify_start_unwind(Asyncify.currData));
-          }
-        } else if (Asyncify.state === Asyncify.State.Rewinding) {
-          // Stop a resume.
-          Asyncify.state = Asyncify.State.Normal;
-          runAndAbortIfError(_asyncify_stop_rewind);
-          _free(Asyncify.currData);
-          Asyncify.currData = null;
-          // Call all sleep callbacks now that the sleep-resume is all done.
-          Asyncify.sleepCallbacks.forEach(callUserCallback);
-        } else {
-          abort(`invalid state: ${Asyncify.state}`);
-        }
-        return Asyncify.handleSleepReturnValue;
+        return Asyncify.handleAsync(() => new Promise(startAsync));
       },
-  handleAsync(startAsync) {
-        return Asyncify.handleSleep((wakeUp) => {
-          // TODO: add error handling as a second param when handleSleep implements it.
-          startAsync().then(wakeUp);
-        });
+  makeAsyncFunction(original) {
+        return WebAssembly.promising(original);
       },
   };
 function checkIncomingModuleAPI() {
   ignoredModuleProp('fetchSettings');
 }
 var wasmImports = {
-  /** @export */
-  _abort_js: __abort_js,
-  /** @export */
-  emscripten_resize_heap: _emscripten_resize_heap,
-  /** @export */
-  fd_close: _fd_close,
-  /** @export */
-  fd_seek: _fd_seek,
   /** @export */
   fd_write: _fd_write,
   /** @export */
@@ -1499,8 +1277,6 @@ var ___wasm_call_ctors = createExportWrapper('__wasm_call_ctors', 0);
 var _main = Module['_main'] = createExportWrapper('main', 2);
 var _fflush = createExportWrapper('fflush', 1);
 var _strerror = createExportWrapper('strerror', 1);
-var _malloc = createExportWrapper('malloc', 1);
-var _free = createExportWrapper('free', 1);
 var _emscripten_stack_init = () => (_emscripten_stack_init = wasmExports['emscripten_stack_init'])();
 var _emscripten_stack_get_free = () => (_emscripten_stack_get_free = wasmExports['emscripten_stack_get_free'])();
 var _emscripten_stack_get_base = () => (_emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'])();
@@ -1508,14 +1284,29 @@ var _emscripten_stack_get_end = () => (_emscripten_stack_get_end = wasmExports['
 var __emscripten_stack_restore = (a0) => (__emscripten_stack_restore = wasmExports['_emscripten_stack_restore'])(a0);
 var __emscripten_stack_alloc = (a0) => (__emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'])(a0);
 var _emscripten_stack_get_current = () => (_emscripten_stack_get_current = wasmExports['emscripten_stack_get_current'])();
-var dynCall_ii = Module['dynCall_ii'] = createExportWrapper('dynCall_ii', 2);
-var dynCall_iiii = Module['dynCall_iiii'] = createExportWrapper('dynCall_iiii', 4);
-var dynCall_jiji = Module['dynCall_jiji'] = createExportWrapper('dynCall_jiji', 4);
-var _asyncify_start_unwind = createExportWrapper('asyncify_start_unwind', 1);
-var _asyncify_stop_unwind = createExportWrapper('asyncify_stop_unwind', 0);
-var _asyncify_start_rewind = createExportWrapper('asyncify_start_rewind', 1);
-var _asyncify_stop_rewind = createExportWrapper('asyncify_stop_rewind', 0);
 
+// Argument name here must shadow the `wasmExports` global so
+// that it is recognised by metadce and minify-import-export-names
+// passes.
+function applySignatureConversions(wasmExports) {
+  // First, make a copy of the incoming exports object
+  wasmExports = Object.assign({}, wasmExports);
+  var makeWrapper___PP = (f) => (a0, a1, a2) => f(a0, BigInt(a1 ? a1 : 0), BigInt(a2 ? a2 : 0));
+  var makeWrapper__p = (f) => (a0) => f(BigInt(a0));
+  var makeWrapper_p_ = (f) => (a0) => Number(f(a0));
+  var makeWrapper_p = (f) => () => Number(f());
+  var makeWrapper_pp = (f) => (a0) => Number(f(BigInt(a0)));
+
+  wasmExports['main'] = makeWrapper___PP(wasmExports['main']);
+  wasmExports['fflush'] = makeWrapper__p(wasmExports['fflush']);
+  wasmExports['strerror'] = makeWrapper_p_(wasmExports['strerror']);
+  wasmExports['emscripten_stack_get_base'] = makeWrapper_p(wasmExports['emscripten_stack_get_base']);
+  wasmExports['emscripten_stack_get_end'] = makeWrapper_p(wasmExports['emscripten_stack_get_end']);
+  wasmExports['_emscripten_stack_restore'] = makeWrapper__p(wasmExports['_emscripten_stack_restore']);
+  wasmExports['_emscripten_stack_alloc'] = makeWrapper_pp(wasmExports['_emscripten_stack_alloc']);
+  wasmExports['emscripten_stack_get_current'] = makeWrapper_p(wasmExports['emscripten_stack_get_current']);
+  return wasmExports;
+}
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
@@ -1535,6 +1326,8 @@ var missingLibrarySymbols = [
   'getTempRet0',
   'setTempRet0',
   'zeroMemory',
+  'getHeapMax',
+  'abortOnCannotGrowMemory',
   'growMemory',
   'strError',
   'inetPton4',
@@ -1549,11 +1342,11 @@ var missingLibrarySymbols = [
   'getExecutableName',
   'listenOnce',
   'autoResumeAudioContext',
-  'dynCallLegacy',
   'getDynCaller',
   'dynCall',
   'asmjsMangle',
   'asyncLoad',
+  'alignMemory',
   'mmapAlloc',
   'HandleAllocator',
   'getNativeTypeSize',
@@ -1726,8 +1519,6 @@ var unexportedSymbols = [
   'stackRestore',
   'ptrToString',
   'exitJS',
-  'getHeapMax',
-  'abortOnCannotGrowMemory',
   'ENV',
   'ERRNO_CODES',
   'DNS',
@@ -1743,7 +1534,6 @@ var unexportedSymbols = [
   'runtimeKeepalivePop',
   'callUserCallback',
   'maybeExit',
-  'alignMemory',
   'wasmTable',
   'noExitRuntime',
   'sigToWasmTypes',
@@ -1816,7 +1606,7 @@ unexportedSymbols.forEach(unexportedRuntimeSymbol);
 
 var calledRun;
 
-function callMain() {
+async function callMain() {
   assert(runDependencies == 0, 'cannot call main when async dependencies remain! (listen on Module["onRuntimeInitialized"])');
   assert(__ATPRERUN__.length == 0, 'cannot call main when preRun functions remain to be called');
 
@@ -1827,8 +1617,12 @@ function callMain() {
 
   try {
 
-    var ret = entryFunction(argc, argv);
+    var ret = entryFunction(argc, BigInt(argv));
 
+    // The current spec of JSPI returns a promise only if the function suspends
+    // and a plain value otherwise. This will likely change:
+    // https://github.com/WebAssembly/js-promise-integration/issues/11
+    ret = await ret;
     // if we're not running an evented main loop, it's time to exit
     exitJS(ret, /* implicit = */ true);
     return ret;

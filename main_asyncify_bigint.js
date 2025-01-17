@@ -64,9 +64,9 @@ if (ENVIRONMENT_IS_NODE) {
   var nodeVersion = process.versions.node;
   var numericVersion = nodeVersion.split('.').slice(0, 3);
   numericVersion = (numericVersion[0] * 10000) + (numericVersion[1] * 100) + (numericVersion[2].split('-')[0] * 1);
-  var minVersion = 230000;
-  if (numericVersion < 230000) {
-    throw new Error('This emscripten-generated code requires node v23.0.0 (detected v' + nodeVersion + ')');
+  var minVersion = 160000;
+  if (numericVersion < 160000) {
+    throw new Error('This emscripten-generated code requires node v16.0.0 (detected v' + nodeVersion + ')');
   }
 
   // These modules will usually be used on Node.js. Load them eagerly to avoid
@@ -339,10 +339,10 @@ function writeStackCookie() {
   // The stack grow downwards towards _emscripten_stack_get_end.
   // We write cookies to the final two words in the stack and detect if they are
   // ever overwritten.
-  HEAPU32[((max)/4)] = 0x02135467;
-  HEAPU32[(((max)+(4))/4)] = 0x89BACDFE;
+  HEAPU32[((max)>>2)] = 0x02135467;
+  HEAPU32[(((max)+(4))>>2)] = 0x89BACDFE;
   // Also test the global address 0 for integrity.
-  HEAPU32[((0)/4)] = 1668509029;
+  HEAPU32[((0)>>2)] = 1668509029;
 }
 
 function checkStackCookie() {
@@ -352,13 +352,13 @@ function checkStackCookie() {
   if (max == 0) {
     max += 4;
   }
-  var cookie1 = HEAPU32[((max)/4)];
-  var cookie2 = HEAPU32[(((max)+(4))/4)];
+  var cookie1 = HEAPU32[((max)>>2)];
+  var cookie2 = HEAPU32[(((max)+(4))>>2)];
   if (cookie1 != 0x02135467 || cookie2 != 0x89BACDFE) {
     abort(`Stack overflow! Stack cookie has been overwritten at ${ptrToString(max)}, expected hex dwords 0x89BACDFE and 0x2135467, but received ${ptrToString(cookie2)} ${ptrToString(cookie1)}`);
   }
   // Also test the global address 0 for integrity.
-  if (HEAPU32[((0)/4)] != 0x63736d65 /* 'emsc' */) {
+  if (HEAPU32[((0)>>2)] != 0x63736d65 /* 'emsc' */) {
     abort('Runtime error: The application has corrupted its heap memory area (address zero)!');
   }
 }
@@ -721,7 +721,7 @@ function createExportWrapper(name, nargs) {
 
 var wasmBinaryFile;
 function findWasmBinary() {
-    var f = 'main_wasm64.wasm';
+    var f = 'main_asyncify_bigint.wasm';
     if (!isDataURI(f)) {
       return locateFile(f);
     }
@@ -824,8 +824,6 @@ async function createWasm() {
 
     wasmExports = Asyncify.instrumentWasmExports(wasmExports);
 
-    wasmExports = applySignatureConversions(wasmExports);
-
     
 
     wasmMemory = wasmExports['memory'];
@@ -882,8 +880,8 @@ async function createWasm() {
 
 // === Body ===
 
-function my_async_i64() { return Asyncify.handleAsync(async () => { return 123n; }); }
-function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n; }); }
+function my_async_i64() { return Asyncify.handleAsync(async () => { return -123n; }); }
+function my_async_u64() { return Asyncify.handleAsync(async () => { return -123n; }); }
 
 // end include: preamble.js
 
@@ -913,12 +911,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
     switch (type) {
       case 'i1': return HEAP8[ptr];
       case 'i8': return HEAP8[ptr];
-      case 'i16': return HEAP16[((ptr)/2)];
-      case 'i32': return HEAP32[((ptr)/4)];
-      case 'i64': return HEAP64[((ptr)/8)];
-      case 'float': return HEAPF32[((ptr)/4)];
-      case 'double': return HEAPF64[((ptr)/8)];
-      case '*': return Number(HEAPU64[((ptr)/8)]);
+      case 'i16': return HEAP16[((ptr)>>1)];
+      case 'i32': return HEAP32[((ptr)>>2)];
+      case 'i64': return HEAP64[((ptr)>>3)];
+      case 'float': return HEAPF32[((ptr)>>2)];
+      case 'double': return HEAPF64[((ptr)>>3)];
+      case '*': return HEAPU32[((ptr)>>2)];
       default: abort(`invalid type for getValue: ${type}`);
     }
   }
@@ -927,6 +925,8 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
 
   var ptrToString = (ptr) => {
       assert(typeof ptr === 'number');
+      // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
+      ptr >>>= 0;
       return '0x' + ptr.toString(16).padStart(8, '0');
     };
 
@@ -941,12 +941,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
     switch (type) {
       case 'i1': HEAP8[ptr] = value; break;
       case 'i8': HEAP8[ptr] = value; break;
-      case 'i16': HEAP16[((ptr)/2)] = value; break;
-      case 'i32': HEAP32[((ptr)/4)] = value; break;
-      case 'i64': HEAP64[((ptr)/8)] = BigInt(value); break;
-      case 'float': HEAPF32[((ptr)/4)] = value; break;
-      case 'double': HEAPF64[((ptr)/8)] = value; break;
-      case '*': HEAPU64[((ptr)/8)] = BigInt(value); break;
+      case 'i16': HEAP16[((ptr)>>1)] = value; break;
+      case 'i32': HEAP32[((ptr)>>2)] = value; break;
+      case 'i64': HEAP64[((ptr)>>3)] = BigInt(value); break;
+      case 'float': HEAPF32[((ptr)>>2)] = value; break;
+      case 'double': HEAPF64[((ptr)>>3)] = value; break;
+      case '*': HEAPU32[((ptr)>>2)] = value; break;
       default: abort(`invalid type for setValue: ${type}`);
     }
   }
@@ -978,19 +978,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
   var abortOnCannotGrowMemory = (requestedSize) => {
       abort(`Cannot enlarge memory arrays to size ${requestedSize} bytes (OOM). Either (1) compile with -sINITIAL_MEMORY=X with X higher than the current value ${HEAP8.length}, (2) compile with -sALLOW_MEMORY_GROWTH which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with -sABORTING_MALLOC=0`);
     };
-  
-  var INT53_MAX = 9007199254740992;
-  
-  var INT53_MIN = -9007199254740992;
-  var bigintToI53Checked = (num) => (num < INT53_MIN || num > INT53_MAX) ? NaN : Number(num);
-  function _emscripten_resize_heap(requestedSize) {
-    requestedSize = bigintToI53Checked(requestedSize);
-  
-    
+  var _emscripten_resize_heap = (requestedSize) => {
       var oldSize = HEAPU8.length;
+      // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
+      requestedSize >>>= 0;
       abortOnCannotGrowMemory(requestedSize);
-    ;
-  }
+    };
 
   var UTF8Decoder = typeof TextDecoder != 'undefined' ? new TextDecoder() : undefined;
   
@@ -1076,9 +1069,12 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
       abort('fd_close called without SYSCALLS_REQUIRE_FILESYSTEM');
     };
 
+  var INT53_MAX = 9007199254740992;
+  
+  var INT53_MIN = -9007199254740992;
+  var bigintToI53Checked = (num) => (num < INT53_MIN || num > INT53_MAX) ? NaN : Number(num);
   function _fd_seek(fd, offset, whence, newOffset) {
     offset = bigintToI53Checked(offset);
-    newOffset = bigintToI53Checked(newOffset);
   
     
       return 70;
@@ -1106,28 +1102,21 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
     };
   
   
-  
-  function _fd_write(fd, iov, iovcnt, pnum) {
-    iov = bigintToI53Checked(iov);
-    iovcnt = bigintToI53Checked(iovcnt);
-    pnum = bigintToI53Checked(pnum);
-  
-    
+  var _fd_write = (fd, iov, iovcnt, pnum) => {
       // hack to support printf in SYSCALLS_REQUIRE_FILESYSTEM=0
       var num = 0;
       for (var i = 0; i < iovcnt; i++) {
-        var ptr = Number(HEAPU64[((iov)/8)]);
-        var len = Number(HEAPU64[(((iov)+(8))/8)]);
-        iov += 16;
+        var ptr = HEAPU32[((iov)>>2)];
+        var len = HEAPU32[(((iov)+(4))>>2)];
+        iov += 8;
         for (var j = 0; j < len; j++) {
           printChar(fd, HEAPU8[ptr+j]);
         }
         num += len;
       }
-      HEAPU64[((pnum)/8)] = BigInt(num);
+      HEAPU32[((pnum)>>2)] = num;
       return 0;
-    ;
-  }
+    };
 
   
   var runtimeKeepaliveCounter = 0;
@@ -1216,7 +1205,7 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         'f': 'f32',
         'd': 'f64',
         'e': 'externref',
-        'p': 'i64',
+        'p': 'i32',
       };
       var type = {
         parameters: [],
@@ -1240,8 +1229,6 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
   
   
   var Asyncify = {
-  rewindArguments:{
-  },
   instrumentWasmImports(imports) {
         var importPattern = /^(my_async_i64|my_async_u64|invoke_.*|__asyncjs__.*)$/;
   
@@ -1276,12 +1263,6 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
           }
         }
       },
-  saveRewindArguments(funcName, passedArguments) {
-        return Asyncify.rewindArguments[funcName] = Array.from(passedArguments)
-      },
-  restoreRewindArguments(funcName) {
-        return Asyncify.rewindArguments[funcName] || []
-      },
   instrumentWasmExports(exports) {
         var ret = {};
         for (let [x, original] of Object.entries(exports)) {
@@ -1289,7 +1270,6 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
             ret[x] = (...args) => {
               Asyncify.exportCallStack.push(x);
               try {
-                Asyncify.saveRewindArguments(x, args);
                 return original(...args);
               } finally {
                 if (!ABORT) {
@@ -1366,22 +1346,22 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         // The Asyncify ABI only interprets the first two fields, the rest is for the runtime.
         // We also embed a stack in the same memory region here, right next to the structure.
         // This struct is also defined as asyncify_data_t in emscripten/fiber.h
-        var ptr = _malloc(24 + Asyncify.StackSize);
-        Asyncify.setDataHeader(ptr, ptr + 24, Asyncify.StackSize);
+        var ptr = _malloc(12 + Asyncify.StackSize);
+        Asyncify.setDataHeader(ptr, ptr + 12, Asyncify.StackSize);
         Asyncify.setDataRewindFunc(ptr);
         return ptr;
       },
   setDataHeader(ptr, stack, stackSize) {
-        HEAPU64[((ptr)/8)] = BigInt(stack);
-        HEAPU64[(((ptr)+(8))/8)] = BigInt(stack + stackSize);
+        HEAPU32[((ptr)>>2)] = stack;
+        HEAPU32[(((ptr)+(4))>>2)] = stack + stackSize;
       },
   setDataRewindFunc(ptr) {
         var bottomOfCallStack = Asyncify.exportCallStack[0];
         var rewindId = Asyncify.getCallStackId(bottomOfCallStack);
-        HEAP32[(((ptr)+(16))/4)] = rewindId;
+        HEAP32[(((ptr)+(8))>>2)] = rewindId;
       },
   getDataRewindFuncName(ptr) {
-        var id = HEAP32[(((ptr)+(16))/4)];
+        var id = HEAP32[(((ptr)+(8))>>2)];
         var name = Asyncify.callStackIdToName[id];
         return name;
       },
@@ -1395,11 +1375,7 @@ function my_async_u64() { return Asyncify.handleAsync(async () => { return 123n;
         // Once we have rewound and the stack we no longer need to artificially
         // keep the runtime alive.
         
-        // When re-winding, the arguments to a function are ignored.  For i32 arguments we
-        // can just call the function with no args at all since and the engine will produce zeros
-        // for all arguments.  However, for i64 arguments we get `undefined cannot be converted to
-        // BigInt`.
-        return func(...Asyncify.restoreRewindArguments(name));
+        return func();
       },
   handleSleep(startAsync) {
         assert(Asyncify.state !== Asyncify.State.Disabled, 'Asyncify cannot be done during or after the runtime exits');
@@ -1532,45 +1508,16 @@ var _emscripten_stack_get_end = () => (_emscripten_stack_get_end = wasmExports['
 var __emscripten_stack_restore = (a0) => (__emscripten_stack_restore = wasmExports['_emscripten_stack_restore'])(a0);
 var __emscripten_stack_alloc = (a0) => (__emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'])(a0);
 var _emscripten_stack_get_current = () => (_emscripten_stack_get_current = wasmExports['emscripten_stack_get_current'])();
-var dynCall_ij = Module['dynCall_ij'] = createExportWrapper('dynCall_ij', 2);
-var dynCall_jjjj = Module['dynCall_jjjj'] = createExportWrapper('dynCall_jjjj', 4);
-var dynCall_jjji = Module['dynCall_jjji'] = createExportWrapper('dynCall_jjji', 4);
+var dynCall_ii = Module['dynCall_ii'] = createExportWrapper('dynCall_ii', 2);
+var dynCall_iiii = Module['dynCall_iiii'] = createExportWrapper('dynCall_iiii', 4);
+var dynCall_jiji = Module['dynCall_jiji'] = createExportWrapper('dynCall_jiji', 4);
+var dynCall_iidiiii = Module['dynCall_iidiiii'] = createExportWrapper('dynCall_iidiiii', 7);
+var dynCall_vii = Module['dynCall_vii'] = createExportWrapper('dynCall_vii', 3);
 var _asyncify_start_unwind = createExportWrapper('asyncify_start_unwind', 1);
 var _asyncify_stop_unwind = createExportWrapper('asyncify_stop_unwind', 0);
 var _asyncify_start_rewind = createExportWrapper('asyncify_start_rewind', 1);
 var _asyncify_stop_rewind = createExportWrapper('asyncify_stop_rewind', 0);
 
-// Argument name here must shadow the `wasmExports` global so
-// that it is recognised by metadce and minify-import-export-names
-// passes.
-function applySignatureConversions(wasmExports) {
-  // First, make a copy of the incoming exports object
-  wasmExports = Object.assign({}, wasmExports);
-  var makeWrapper___PP = (f) => (a0, a1, a2) => f(a0, BigInt(a1 ? a1 : 0), BigInt(a2 ? a2 : 0));
-  var makeWrapper__p = (f) => (a0) => f(BigInt(a0));
-  var makeWrapper_p_ = (f) => (a0) => Number(f(a0));
-  var makeWrapper_pp = (f) => (a0) => Number(f(BigInt(a0)));
-  var makeWrapper_p = (f) => () => Number(f());
-  var makeWrapper__p_ = (f) => (a0, a1) => f(BigInt(a0), a1);
-  var makeWrapper__p___ = (f) => (a0, a1, a2, a3) => f(BigInt(a0), a1, a2, a3);
-
-  wasmExports['main'] = makeWrapper___PP(wasmExports['main']);
-  wasmExports['fflush'] = makeWrapper__p(wasmExports['fflush']);
-  wasmExports['strerror'] = makeWrapper_p_(wasmExports['strerror']);
-  wasmExports['malloc'] = makeWrapper_pp(wasmExports['malloc']);
-  wasmExports['free'] = makeWrapper__p(wasmExports['free']);
-  wasmExports['emscripten_stack_get_base'] = makeWrapper_p(wasmExports['emscripten_stack_get_base']);
-  wasmExports['emscripten_stack_get_end'] = makeWrapper_p(wasmExports['emscripten_stack_get_end']);
-  wasmExports['_emscripten_stack_restore'] = makeWrapper__p(wasmExports['_emscripten_stack_restore']);
-  wasmExports['_emscripten_stack_alloc'] = makeWrapper_pp(wasmExports['_emscripten_stack_alloc']);
-  wasmExports['emscripten_stack_get_current'] = makeWrapper_p(wasmExports['emscripten_stack_get_current']);
-  wasmExports['dynCall_ij'] = makeWrapper__p_(wasmExports['dynCall_ij']);
-  wasmExports['dynCall_jjjj'] = makeWrapper__p___(wasmExports['dynCall_jjjj']);
-  wasmExports['dynCall_jjji'] = makeWrapper__p___(wasmExports['dynCall_jjji']);
-  wasmExports['asyncify_start_unwind'] = makeWrapper__p(wasmExports['asyncify_start_unwind']);
-  wasmExports['asyncify_start_rewind'] = makeWrapper__p(wasmExports['asyncify_start_rewind']);
-  return wasmExports;
-}
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
@@ -1882,7 +1829,7 @@ function callMain() {
 
   try {
 
-    var ret = entryFunction(argc, BigInt(argv));
+    var ret = entryFunction(argc, argv);
 
     // if we're not running an evented main loop, it's time to exit
     exitJS(ret, /* implicit = */ true);
